@@ -34,6 +34,15 @@ public:
   bool mifareBlockRead(uint8_t blockno,uint8_t *buffer);
   uint8_t mifareBlockWrite16(uint8_t blockno, uint8_t *buffer);
   bool mifareHalt();
+  // Mifare Classic Authentication
+  bool mifareAuthenticateKeyA(uint8_t block, uint8_t *key, uint8_t *uid);
+  bool mifareAuthenticateKeyB(uint8_t block, uint8_t *key, uint8_t *uid);
+  bool mifareAuthenticatedBlockRead(uint8_t blockno, uint8_t *buffer, uint8_t *key, uint8_t *uid, bool useKeyB = false);
+  
+  // Additional Mifare Classic utility functions
+  bool tryAuthenticatedBlockRead(uint8_t blockno, uint8_t *buffer, uint8_t* key, uint8_t* uid, bool useKeyB = false);
+  bool mifareAuthWithFallback(uint8_t block, uint8_t* key, uint8_t* uid, bool useKeyB = false);
+  bool scanMifareClassic1K(uint8_t* uid, uint8_t* key = nullptr);
   /*
    * Helper functions
    */

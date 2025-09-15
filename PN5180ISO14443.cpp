@@ -240,3 +240,220 @@ bool PN5180ISO14443::isCardPresent() {
 	return (readCardSerial(buffer) >=4);
 }
 
+// Mifare Classic Authentication with Key A using PN5180 hardware command
+bool PN5180ISO14443::mifareAuthenticateKeyA(uint8_t block, uint8_t *key, uint8_t *uid) {
+    // Clear any existing errors first
+    clearIRQStatus(0xFFFFFFFF);
+    delay(10);
+
+    // First ensure card is properly selected
+    uint8_t buffer[10];
+    uint8_t uidLength = activateTypeA(buffer, 1);  // WUPA to wake card
+    if (uidLength == 0) {
+        // Try REQA (0x26) instead of WUPA (0x52)
+        uidLength = activateTypeA(buffer, 0);
+        if (uidLength == 0) {
+            return false;
+        }
+    }
+
+    // Use fresh UID from activation
+    uint8_t freshUid[4];
+    for (int i = 0; i < 4; i++) {
+        freshUid[i] = buffer[3 + i];
+    }
+
+    // The PN5180 hardware authentication command handles everything
+    return mifareAuthenticate(key, 0x60, block, freshUid);
+}
+
+// Mifare Classic Authentication with Key B using PN5180 hardware command
+bool PN5180ISO14443::mifareAuthenticateKeyB(uint8_t block, uint8_t *key, uint8_t *uid) {
+    // First ensure card is properly selected
+    uint8_t buffer[10];
+    uint8_t uidLength = activateTypeA(buffer, 1);  // WUPA to wake card
+    if (uidLength == 0) {
+        return false;
+    }
+
+    // Use fresh UID from activation
+    uint8_t freshUid[4];
+    for (int i = 0; i < 4; i++) {
+        freshUid[i] = buffer[3 + i];
+    }
+
+    // The PN5180 hardware authentication command handles everything
+    return mifareAuthenticate(key, 0x61, block, freshUid);
+}
+
+// Combined authenticate and read function
+bool PN5180ISO14443::mifareAuthenticatedBlockRead(uint8_t blockno, uint8_t *buffer, uint8_t *key, uint8_t *uid, bool useKeyB) {
+    // Authenticate the sector containing this block
+    uint8_t sector = blockno / 4;
+    uint8_t authBlock = sector * 4; // First block of sector
+
+    bool authSuccess;
+    if (useKeyB) {
+        authSuccess = mifareAuthenticateKeyB(authBlock, key, uid);
+    } else {
+        authSuccess = mifareAuthenticateKeyA(authBlock, key, uid);
+    }
+
+    if (!authSuccess) {
+        return false;
+    }
+
+    // Now read the block
+    return mifareBlockRead(blockno, buffer);
+}
+
+// Enhanced authenticated block read with better error handling and debugging
+bool PN5180ISO14443::tryAuthenticatedBlockRead(uint8_t blockno, uint8_t *buffer, uint8_t* key, uint8_t* uid, bool useKeyB) {
+    Serial.print("Attempting authenticated read of block ");
+    Serial.print(blockno);
+    Serial.println(":");
+
+    // Authenticate the sector containing this block
+    uint8_t sector = blockno / 4;
+    uint8_t authBlock = sector * 4;  // First block of sector
+
+    if (!mifareAuthWithFallback(authBlock, key, uid, useKeyB)) {
+        return false;
+    }
+
+    // Now try to read the block
+    Serial.print("Reading block ");
+    Serial.print(blockno);
+    Serial.print("...");
+
+    uint8_t cmd[2];
+    cmd[0] = 0x30;  // READ command
+    cmd[1] = blockno;
+
+    if (!sendData(cmd, 2, 0x00)) {
+        Serial.println(" Read command failed");
+        return false;
+    }
+
+    delay(10);
+
+    uint32_t rxStatus;
+    readRegister(RX_STATUS, &rxStatus);
+    uint16_t len = (uint16_t)(rxStatus & 0x000001ff);
+
+    Serial.print(" Got ");
+    Serial.print(len);
+    Serial.print(" bytes");
+
+    if (len >= 16) {
+        if (readData(16, buffer)) {
+            Serial.println(" SUCCESS!");
+            return true;
+        }
+    }
+
+    Serial.println(" FAILED");
+    return false;
+}
+
+// Mifare authentication with fallback mechanisms
+bool PN5180ISO14443::mifareAuthWithFallback(uint8_t block, uint8_t* key, uint8_t* uid, bool useKeyB) {
+    Serial.print("  Authenticating block ");
+    Serial.print(block);
+    Serial.print(useKeyB ? " with key B..." : " with key A...");
+
+    // Clear any existing errors first
+    clearIRQStatus(0xFFFFFFFF);
+    delay(10);
+
+    // First ensure card is properly selected
+    uint8_t buffer[10];
+    uint8_t uidLength = activateTypeA(buffer, 1);  // WUPA to wake card
+    if (uidLength == 0) {
+        Serial.println(" Card activation failed - trying REQA instead of WUPA");
+        // Try REQA (0x26) instead of WUPA (0x52)
+        uidLength = activateTypeA(buffer, 0);
+        if (uidLength == 0) {
+            Serial.println(" REQA also failed");
+            return false;
+        }
+    }
+
+    // Use fresh UID from activation
+    uint8_t freshUid[4];
+    for (int i = 0; i < 4; i++) {
+        freshUid[i] = buffer[3 + i];
+    }
+
+    // Try authentication
+    bool result;
+    if (useKeyB) {
+        result = mifareAuthenticate(key, 0x61, block, freshUid);
+    } else {
+        result = mifareAuthenticate(key, 0x60, block, freshUid);
+    }
+
+    Serial.println(result ? " SUCCESS" : " FAILED");
+    return result;
+}
+
+// Comprehensive Mifare Classic 1K scanner
+bool PN5180ISO14443::scanMifareClassic1K(uint8_t* uid, uint8_t* key) {
+    Serial.println("=== MIFARE CLASSIC 1K SCAN ===");
+    Serial.printf("Card UID: %02X:%02X:%02X:%02X\n", uid[0], uid[1], uid[2], uid[3]);
+    Serial.println();
+
+    // Default keys to try if none provided
+    uint8_t defaultKeyA[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t ndefKey[] = {0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7};
+    uint8_t transportKey[] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5};
+
+    uint8_t blockData[16];
+    bool foundSomeData = false;
+
+    // Scan all 16 sectors
+    for (int sector = 0; sector < 16; sector++) {
+        uint8_t firstBlock = sector * 4;
+        Serial.printf("Sector %d (blocks %d-%d):\n", sector, firstBlock, firstBlock + 3);
+
+        uint8_t* testKey = key ? key : defaultKeyA;  // Use provided key or default
+        bool sectorAuthenticated = false;
+
+        // Try different keys
+        uint8_t* keys[] = {testKey, ndefKey, transportKey};
+        const char* keyNames[] = {"Provided/Default", "NDEF", "Transport"};
+
+        for (int keyIdx = 0; keyIdx < 3; keyIdx++) {
+            Serial.printf("  Trying %s Key A: ", keyNames[keyIdx]);
+            if (mifareAuthenticateKeyA(firstBlock, keys[keyIdx], uid)) {
+                Serial.println("SUCCESS!");
+                sectorAuthenticated = true;
+
+                // Read all blocks in this sector
+                for (int blockOffset = 0; blockOffset < 4; blockOffset++) {
+                    uint8_t blockNum = firstBlock + blockOffset;
+                    if (mifareBlockRead(blockNum, blockData)) {
+                        Serial.printf("    Block %2d: ", blockNum);
+                        for (int i = 0; i < 16; i++) {
+                            if (blockData[i] < 0x10) Serial.print("0");
+                            Serial.print(blockData[i], HEX);
+                            Serial.print(" ");
+                        }
+                        Serial.println();
+                        foundSomeData = true;
+                    }
+                }
+                break;  // Found working key, move to next sector
+            } else {
+                Serial.println("Failed");
+            }
+        }
+
+        if (!sectorAuthenticated) {
+            Serial.println("  No working keys found for this sector");
+        }
+        Serial.println();
+    }
+
+    return foundSomeData;
+}
