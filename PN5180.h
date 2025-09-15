@@ -113,6 +113,10 @@ public:
   /* cmd 0x17 */
   bool setRF_off();
 
+
+  /* cmd 0x1C */
+  bool mifareAuthenticate(uint8_t *key, uint8_t keyType, uint8_t blockAddr, uint8_t *uid);
+
   /*
    * Helper functions
    */

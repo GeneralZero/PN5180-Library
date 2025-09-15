@@ -36,6 +36,7 @@
 #define PN5180_LOAD_RF_CONFIG           (0x11)
 #define PN5180_RF_ON                    (0x16)
 #define PN5180_RF_OFF                   (0x17)
+#define PN5180_MIFARE_AUTHENTICATE      (0x0C)
 
 uint8_t PN5180::readBuffer[508];
 
@@ -438,6 +439,49 @@ bool PN5180::setRF_off() {
   clearIRQStatus(TX_RFOFF_IRQ_STAT);
   return true;
 }
+
+/*
+ * MIFARE_AUTHENTICATE - 0x0C
+ * This command performs Mifare Classic authentication using the PN5180's built-in CRYPTO1 implementation.
+ */
+bool PN5180::mifareAuthenticate(uint8_t *key, uint8_t keyType, uint8_t blockAddr, uint8_t *uid) {
+  //Authenticate command: [0x0C, 6-byte key, keyType (0x60/0x61), blockAddr, 4-byte UID]
+  // 0x60 = KeyA, 0x61 = KeyB
+  uint8_t cmd[13];
+  cmd[0] = PN5180_MIFARE_AUTHENTICATE;
+
+  // Copy 6-byte key
+  for (int i = 0; i < 6; i++) {
+    cmd[1 + i] = key[i];
+  }
+
+  cmd[7] = keyType;    // 0x60 for Key A, 0x61 for Key B
+  cmd[8] = blockAddr;  // Block address
+
+  // Copy 4-byte UID
+  for (int i = 0; i < 4; i++) {
+    cmd[9 + i] = uid[i];
+  }
+
+  // Wait until not Busy
+  while (LOW != digitalRead(PN5180_BUSY)) {
+    delay(1);
+  }
+
+  // The MIFARE_AUTHENTICATE command returns a 1-byte response
+  uint8_t response[1];
+
+  SPI.beginTransaction(PN5180_SPI_SETTINGS);
+  bool cmdResult = transceiveCommand(cmd, 13, response, 1);
+  SPI.endTransaction();
+
+  if (cmdResult) {
+    return (response[0] == 0);
+  }
+
+  return false;
+}
+
 
 //---------------------------------------------------------------------------------------------
 
